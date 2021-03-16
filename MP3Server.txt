@@ -1,0 +1,245 @@
+import java.io.*;
+import java.net.Socket;
+import java.net.ServerSocket;
+import java.net.SocketException;
+import java.nio.file.Files;
+
+/**
+ * Project 4
+ *
+ * A MP3 Server for sending mp3 files over a socket connection.
+ *
+ * @author Samantha Tugman, stugman
+ * @author Gaurang Vinayak, gvinayak
+ *
+ * @version 2019-04-12
+ */
+public class MP3Server {
+    public static void main(String[] args) throws IOException {
+        ServerSocket serverSocket = new ServerSocket(9478);
+        Socket clientSocket;
+        while (true) {
+            try {
+                clientSocket = serverSocket.accept();
+                System.out.println("Client Connected.");
+                Thread t1 = new Thread(new ClientHandler(clientSocket));
+                t1.start();
+                try {
+                    t1.join();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+}
+
+/**
+ * Project 4
+ *
+ * Class - ClientHandler
+ * <p>
+ * This class implements Runnable, and will contain the logic for handling responses and requests to
+ * and from a given client. The threads you create in MP3Server will be constructed using instances
+ * of this class.
+ *
+ * @author Samantha Tugman, stugman
+ * @author Gaurang Vinayak, gvinayak
+ *
+ * @version 2019-04-12
+ */
+final class ClientHandler implements Runnable {
+
+    private ObjectInputStream inputStream;
+    private ObjectOutputStream outputStream;
+
+
+    public ClientHandler(Socket clientSocket) {
+        try {
+            inputStream = new ObjectInputStream(clientSocket.getInputStream());
+            outputStream = new ObjectOutputStream(clientSocket.getOutputStream());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * This method is the start of execution for the thread. See the handout for more details on what
+     * to do here.
+     */
+    public void run() {
+
+        SongRequest request;
+        try {
+
+            request = (SongRequest) inputStream.readObject();
+
+            while (request != null) {
+
+                if (request.isDownloadRequest()) {
+                    String fileName = request.getArtistName() + " - " + request.getSongName() + ".mp3";
+                    if (!fileInRecord(fileName)) {
+                        SongHeaderMessage result = new SongHeaderMessage(true, "NONAME",
+                                "NOARTIST", -1);
+                        outputStream.writeObject(result);
+                        outputStream.flush();
+                    } else { //if the fileName is in the txt file
+                        File f = new File("songDatabase/" + fileName);
+                        int size = (int) f.length();
+                        SongHeaderMessage result = new SongHeaderMessage(true, request.getSongName(),
+                                request.getArtistName(), size);
+                        ///how to get the file size
+                        outputStream.writeObject(result);
+                        outputStream.flush();
+                        byte[] newArray = readSongData(fileName);
+                        if (newArray == null) return;
+
+                        sendByteArray(newArray);
+
+
+                    }
+                } // end if the SongRequest is a downloadRequest
+                if (!request.isDownloadRequest()) {
+                    SongHeaderMessage result = new SongHeaderMessage(false, "NONAME",
+                            "NOARTIST", -1);
+                    outputStream.writeObject(result);
+                    outputStream.flush();
+                    outputStream.writeObject("Preparing list of songs...\n");
+                    outputStream.flush();
+
+                    sendRecordData();
+                }
+                request = (SongRequest) inputStream.readObject();
+
+            }
+        } catch (ClassNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException f) {
+            f.getMessage();
+        }
+
+    }
+
+    /**
+     * Searches the record file for the given filename.
+     *
+     * @param fileName the fileName to search for in the record file
+     * @return true if the fileName is present in the record file, false if the fileName is not
+     */
+    private static boolean fileInRecord(String fileName) throws IOException {
+        String s = "";
+        String a;
+        try {
+            FileReader fr = new FileReader("record.txt");
+            BufferedReader bfr = new BufferedReader(fr);
+            while ((a = bfr.readLine()) != null) {
+                s = s + a + " ";
+            }
+            bfr.close();
+            if (s.contains(fileName)) {
+                return true;
+            }
+        } catch (FileNotFoundException e) {
+            return false;
+        }
+        return false;
+    }
+
+    /**
+     * Read the bytes of a file with the given name into a byte array.
+     *
+     * @param fileName the name of the file to read
+     * @return the byte array containing all bytes of the file, or null if an error occurred
+     */
+    private static byte[] readSongData(String fileName) {
+        File f = new File("songDatabase/" + fileName);
+
+        byte[] a = null;
+        try {
+            a = Files.readAllBytes(f.toPath());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return a;
+    }
+
+    /**
+     * Split the given byte array into smaller arrays of size 1000, and send the smaller arrays
+     * to the client using SongDataMessages.
+     *
+     * @param songData the byte array to send to the client
+     */
+    private void sendByteArray(byte[] songData) {
+
+        int length = songData.length;
+        int extra = length % 1000;
+        int full = length / 1000;
+        System.out.println(length);
+        for (int i = 0; i < full; i++) {
+
+            byte[] byteArray = new byte[1000];
+
+            for (int j = 0; j < 1000; j++) {
+                byteArray[j] = songData[(i * 1000) + j];
+            }
+            SongDataMessage aSongDataMessage = new SongDataMessage(byteArray);
+            try {
+                outputStream.writeObject(aSongDataMessage);
+                outputStream.flush();
+            } catch (IOException e) {
+                System.out.println("An error has been caught in sendByteArray in Server.");
+                e.printStackTrace();
+            }
+        }
+
+        byte[] newByteArray = new byte[extra];
+        for (int i = 0; i < extra; i++) {
+            newByteArray[i] = songData[(1000 * full) + i];
+        }
+        SongDataMessage aSongDataMessage = new SongDataMessage(newByteArray);
+        try {
+            outputStream.writeObject(aSongDataMessage);
+            outputStream.flush();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Read ''record.txt'' line by line again, this time formatting each line in a readable
+     * format, and sending it to the client. Send a ''null'' value to the client when done, to
+     * signal to the client that you've finished sending the record data.
+     */
+    private void sendRecordData() {
+        String record = "";
+        String aLine = "";
+
+        try {
+            FileReader fr = new FileReader("record.txt");
+            BufferedReader bfr = new BufferedReader(fr);
+
+            while ((aLine = bfr.readLine()) != null) {
+                int indexOfDash = aLine.indexOf("-");
+                String artist = aLine.substring(0, indexOfDash - 1);
+                int indexOfPeriod = aLine.indexOf(".");
+                String title = aLine.substring(indexOfDash + 2, indexOfPeriod);
+                String newLine = "\"" + title + "\"" + " by: " + artist + "\n";
+                record = record + newLine;
+
+            }
+
+
+            outputStream.writeObject(record);
+            outputStream.flush();
+            outputStream.writeObject(null);
+            outputStream.flush();
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}

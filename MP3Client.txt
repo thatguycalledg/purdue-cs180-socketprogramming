@@ -1,0 +1,234 @@
+import javax.swing.text.html.Option;
+import java.io.*;
+import java.net.Socket;
+import java.util.Optional;
+import java.util.Scanner;
+
+/**
+ * Project 4
+ *
+ * An MP3 Client to request .mp3 files from a server and receive them over the socket connection.
+ *
+ * @author Samantha Tugman, stugman
+ * @author Gaurang Vinayak, gvinayak
+ *
+ * @version 2019-04-12
+ */
+public class MP3Client {
+
+    public static void main(String[] args) {
+
+        Socket mp3ClientSocket;
+        ObjectOutputStream beOut;
+        String firstMessage = "";
+        SongRequest wantsList;
+        SongRequest wantsDownload;
+        Thread r;
+
+        try {
+            Scanner scan = new Scanner(System.in);
+
+
+            while (true) {
+                mp3ClientSocket = new Socket("66.70.189.118", 9478);
+                beOut = new ObjectOutputStream(mp3ClientSocket.getOutputStream());
+
+
+                do {
+                    System.out.println(("Type in \"1\" to see a list of songs, or type in \"2\" to download a song."));
+                    System.out.println("Type in \"exit\" to leave.");
+                    firstMessage = scan.nextLine(); //Checks if they want a list, a download, or exit.
+
+                } while ((!firstMessage.equals("1")) && (!firstMessage.equals("2")) && (!firstMessage.equals("exit")));
+
+                if (firstMessage.equals("1")) {
+
+                    wantsList = new SongRequest(false);
+                    beOut.writeObject(wantsList);
+                    beOut.flush();
+                }
+
+                if (firstMessage.equals("2")) {
+
+                    System.out.println("Please enter the song name you would like: ");
+                    String downloadSongName = scan.nextLine();
+                    String enterArtist = String.format("Please enter the artist that made %s\n", downloadSongName);
+                    System.out.print(enterArtist);
+                    String downloadSongArtist = scan.nextLine();
+                    wantsDownload = new SongRequest(true, downloadSongName, downloadSongArtist);
+                    beOut.writeObject(wantsDownload);
+                    beOut.flush();
+                }
+
+                if (firstMessage.equals("exit")) return;
+
+                r = new Thread(new ResponseListener(mp3ClientSocket));
+                r.start();
+
+
+                try {
+                    r.join();
+
+                } catch (InterruptedException f) {
+
+                    System.out.print("An Interrupted Exception has been found in MP3Client: ");
+                    System.out.println(f.getMessage());
+                }
+
+                beOut.close();
+            }
+
+        } catch (IOException e) {
+
+            System.out.print("An IO Error has been found in MP3Client: ");
+            System.out.println(e.getMessage());
+        }
+    }
+}
+
+
+/**
+ * Project 4
+ *
+ * This class implements Runnable, and will contain the logic for listening for
+ * server responses. The threads you create in MP3Server will be constructed using
+ * instances of this class.
+ *
+ * @author Samantha Tugman, stugman
+ * @author Gaurang Vinayak, gvinayak
+ *
+ * @version 2019-04-12
+ */
+final class ResponseListener implements Runnable {
+
+    private ObjectInputStream ois;
+
+    public ResponseListener(Socket clientSocket) {
+
+        try {
+            ois = new ObjectInputStream(clientSocket.getInputStream());
+
+        } catch (IOException e) {
+            System.out.print("An IO Error has been found in ResponseListener: ");
+            System.out.println(e.getMessage());
+        }
+    }
+
+    /**
+     * Listens for a response from the server.
+     *
+     * Continuously tries to read a SongHeaderMessage. Gets the artist name, song name, and file size from that header,
+     * and if the file size is not -1, that means the file exists. If the file does exist, the method then subsequently
+     * waits for a series of SongDataMessages, takes the byte data from those data messages and writes it into a
+     * properly named file.
+     */
+    public void run() {
+
+        Object receivedMessage;
+        SongDataMessage songDataBytes;
+
+        try {
+
+            receivedMessage = ois.readObject();
+
+            if (receivedMessage instanceof SongHeaderMessage) {
+
+                SongHeaderMessage checkDownload = (SongHeaderMessage) receivedMessage;
+
+                if (checkDownload.isSongHeader()) {  //if object is a download request
+                    int size = checkDownload.getFileSize();
+                    if (size < 0) {
+                        System.out.print("Song not available.\n");
+                        return;
+                    } else {
+                        System.out.println("Thank you. Your song has been saved.\n");
+                    }
+
+                    byte[] arr = new byte[size];
+
+                    byte[] temp;
+
+
+                    for (int i = 0; i < (size / 1000); i++) {
+
+                        songDataBytes = (SongDataMessage) ois.readObject();
+                        temp =  songDataBytes.getData();
+                        for (int j = 0; j < 1000; j++) {
+
+                            arr[(i * 1000) + j] = temp[j];
+                        }
+                    }
+
+                    songDataBytes = (SongDataMessage) ois.readObject();
+                    temp =  songDataBytes.getData();
+
+                    for (int i = 0; i < (size % 1000); i++) {
+
+                        arr[((size / 1000) * 1000) + i] = temp[i];
+                    }
+
+
+                    String fileName = ((SongHeaderMessage) receivedMessage).getArtistName();
+                    fileName += " - ";
+                    fileName += ((SongHeaderMessage) receivedMessage).getSongName();
+                    fileName += ".mp3";
+
+                    writeByteArrayToFile(arr, fileName);
+
+                }
+
+                if (!checkDownload.isSongHeader()) {
+
+                    Object endTest;
+
+                    while ((endTest = ois.readObject()) != null) {
+                        System.out.print((String) endTest);
+                    }
+                    System.out.print("\n");
+
+                }
+            }
+
+        } catch (IOException e) {
+            e.printStackTrace();
+
+            System.out.println("An IO Error has been found in ResponseListener run.");
+            System.out.println(e.getMessage());
+
+        } catch (ClassNotFoundException f) {
+
+            f.printStackTrace();
+        }
+    }
+
+    /**
+     * Writes the given array of bytes to a file whose name is given by the fileName argument.
+     *
+     * @param songBytes the byte array to be written
+     * @param fileName  the name of the file to which the bytes will be written
+     */
+    private void writeByteArrayToFile(byte[] songBytes, String fileName) {
+
+        File dir = new File("savedSongs");
+        File f = new File("savedSongs" + File.separator + fileName);
+
+        try {
+
+            FileOutputStream fos = new FileOutputStream(f);
+
+            fos.write(songBytes);
+            fos.flush();
+            fos.close();
+
+        } catch (FileNotFoundException e) {
+
+            System.out.println("A File not Found error has been found in writeByteArrayToFile.");
+            System.out.println(e.getMessage());
+
+        } catch (IOException e) {
+
+            System.out.println("An IO Error has been found in writeByteArrayToFile.");
+        }
+
+    }
+}
